@@ -19,6 +19,7 @@
     "organic-angel": "^0.2.17",
     "organic-dna": "0.0.1",
     "organic-dna-fold": "^0.1.1",
+    "organic-dna-fsloader": "0.0.2",
     "organic-dna-save": "0.0.1",
     "temp": "^0.8.1",
     "underscore": "^1.7.0"
