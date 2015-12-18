@@ -1,160 +1,140 @@
-var fs = require("fs")
+var merge = require('merge-util')
 var path = require("path")
+var fs = require("fs")
+var glob = require("glob-stream")
+var fse = require('fs-extra')
+var async = require('async')
 
 var temp = require('temp')
-var async = require("async")
-var _ = require("underscore")
+// Automatically track and cleanup files at exit
+temp.track()
 
-var loadDir = require("organic-dna-fsloader").loadDir
-var DNA = require("organic-dna")
-var save = require("organic-dna-save")
-var fold = require("organic-dna-fold")
-
-var cp = require("cp-r")
-var inquirer = require("inquirer")
-
-var exec = require("child_process").exec
+var deepMergeFile = function(templatesRoot, root, startHook, doneHook) {
+  return function(file) {
+    if(startHook) startHook(file)
+    var sourcePath = file.path
+    var destPath = path.join(root, sourcePath.replace(templatesRoot, ""))
+    if(path.extname(sourcePath) == ".json") {
+      fs.readFile(sourcePath, function(err, sourceData){
+        if(err) return console.error("failed to read template: ", sourcePath, err)
+        sourceData = JSON.parse(sourceData.toString())
+        fs.readFile(destPath, function(err, destData){
+          if(destData)
+            destData = JSON.parse(destData.toString())
+          else
+            destData = {}
+          if(typeof sourceData != "object")
+            destData = sourceData
+          else
+            merge(destData, sourceData)
+          fse.ensureFile(destPath, function(err){
+            if(err) return console.error("failed to ensure file", destPath, err)
+            fs.writeFile(destPath, JSON.stringify(destData, null, 2), function(err){
+              if(err)
+                console.error("failed to write: ", destPath, err)
+              else
+                console.log("wrote: ", destPath)
+              if(doneHook) doneHook(file)
+            })
+          })
+        })
+      })
+    } else
+    if(sourcePath.indexOf(".gitignore") > -1) {
+      fs.readFile(sourcePath, function(err, sourceData){
+        if(err) return console.error("failed to read: ", sourcePath)
+        fse.ensureFile(destPath, function(err){
+          if(err) return console.error("failed to ensure file", destPath, err)
+          fs.readFile(destPath, function(err, destData){
+            var sourceLines = sourceData.toString().split("\n")
+            var destLines = destData.toString().split("\n")
+            sourceLines.forEach(function(line){
+              if(destLines.indexOf(line) == -1)
+                destLines.push(line)
+            })
+            fs.writeFile(destPath, destLines.join("\n"), function(err){
+              if(err)
+                console.error("failed to append: ", sourcePath, "->", destPath, err)
+              else
+                console.log("wrote: ", destPath)
+              if(doneHook) doneHook(file)
+            })
+          })
+        })
+      })
+    } else {
+      fs.readFile(sourcePath, function(err, data){
+        if(err) return console.error("failed to read: ", sourcePath)
+        fse.ensureFile(destPath, function(err){
+          if(err) return console.error("failed to ensure file", destPath, err)
+          fs.writeFile(destPath, data, function(err){
+            if(err)
+              console.error("failed to copy over: ", sourcePath, "->", destPath, err)
+            else
+              console.log("wrote: ", destPath)
+            if(doneHook) doneHook(file)
+          })
+        })
+      })
+    }
+  }
+}
 
 module.exports = function(angel){
-  require("angelabilities-exec")(angel)
-  angel.on("stack update :source", function(angel){
-    temp.track();
-
-    var upstreamDirPath;
+  angel.on("stack update :source :updatePath? :branch?", function(angel){
+    require("angelabilities-exec")(angel)
+    var upstreamDir = null
 
     var tasks = [
-      // clone to a temporary folder
-      function(next){
-        console.info("cloning upstream source ...")
-        temp.mkdir('upstream', function(err, dirPath) {
-          if(err) return next(err)
-          angel.sh("git clone "+angel.cmdData.source+" "+dirPath, function(err){
-            if(err) return next(err)
-            upstreamDirPath = dirPath
-            var child = exec("npm install", {
-              cwd: upstreamDirPath,
-              env: process.env
-            }, next)
-            child.stdout.pipe(process.stdout)
-            child.stderr.pipe(process.stderr)
-          })
-        })
-      },
+     // clone to a temporary folder
+     function(next){
+       console.info("cloning upstream source ...")
+       temp.mkdir('upstream', function(err, dirPath) {
+         if(err) return next(err)
+         upstreamDir = dirPath
+         angel.sh([
+           "git clone "+ angel.cmdData.source + " " + upstreamDir,
+           "cd " + upstreamDir,
+           "git checkout " + (angel.cmdData.branch?angel.cmdData.branch:'master')
+         ].join(" && "), next)
+       })
+     },
 
-      // apply upgrades on a temprory folder
-      function(next){
-        fs.readdir(path.join(upstreamDirPath, "upgrades"), function(err, entries){
-          var questions = [/*{
-            type: "input",
-            name: "username",
-            message: "username"
-          }*/]
-          entries.forEach(function(entry){
-            questions.push({
-              type: "input",
-              name: entry,
-              message: "used "+entry+"? [y,n]",
-              default: "n"
-            })
-          })
-          inquirer.prompt(questions, function(answers) {
-            var mergeList = []
-            for(var key in answers)
-              if(answers[key] == "y")
-                mergeList.push(key)
-            async.eachSeries(mergeList, function(item, nextItem){
-              console.info("upgrading upstream "+item+" ...")
-              var child = exec("node ./node_modules/.bin/angel stack add ./upgrades/"+item, {
-                cwd: upstreamDirPath,
-                env: process.env
-              }, nextItem)
-              child.stdout.pipe(process.stdout)
-              child.stderr.pipe(process.stderr)
-            }, next)
-          })
-        })
-      },
+     // apply upgrade
+     function (next) {
+       console.info("apply upstream upgrade ...")
+       var templatesRoot = path.join(upstreamDir, angel.cmdData.updatePath?angel.cmdData.updatePath:'')
+       var root = process.cwd()
+       var filesToProcess = 0
+       var onFileStart = function(){
+         filesToProcess += 1
+       }
+       var onFileDone = function(){
+         filesToProcess -= 1
+         if(filesToProcess == 0) {
+           next()
+         }
+       }
+       glob.create(templatesRoot+"/**/*.*", {dot: true, ignore: "/.git"})
+         .on("data", deepMergeFile(templatesRoot, root, onFileStart, onFileDone))
+         .on("error", console.error)
+         .on('end', function () {
+           if (filesToProcess === 0) console.info('no files to process in', templatesRoot+"/**/*.*")
+         })
+     }
+   ]
 
-      // merge dna
-      function(next){
-        console.info("merging dna ...")
-        var upstreamDNA = new DNA()
-        var currentDNA = new DNA()
-        loadDir(upstreamDNA, path.join(upstreamDirPath, "dna"), function(err){
-          if(err) return next(err)
-          loadDir(currentDNA, path.join(process.cwd(), "dna"), function(err){
-            if(err) return next(err)
-            fold(currentDNA, upstreamDNA)
-            save(currentDNA, path.join(process.cwd(), "dna"), function(err){
-              if(err) return next(err)
-              next()
-            })
-          })
-        })
-      },
-
-      // update package.json & npm install
-      function(next){
-        console.info("updating package.json (dev)dependencies ...")
-        var currentPackageJSONPath = path.join(process.cwd(), "package.json")
-        var upstreamPackageJSON = require(path.join(upstreamDirPath, "package.json"))
-        var currentPackageJSON = require(currentPackageJSONPath)
-        _.extend(currentPackageJSON.dependencies, upstreamPackageJSON.dependencies)
-        _.extend(currentPackageJSON.devDependencies, upstreamPackageJSON.devDependencies)
-        fs.writeFile(currentPackageJSONPath, JSON.stringify(currentPackageJSON, null, 2), function(err){
-          if(err) return next(err)
-          angel.sh("npm install", next)
-        })
-      },
-
-      // copy over context baseline 
-      function(next){
-        fs.readdir(path.join(upstreamDirPath, "context"), function(err, entries){
-          var questions = [/*{
-            type: "input",
-            name: "username",
-            message: "username"
-          }*/]
-          entries.forEach(function(entry){
-            questions.push({
-              type: "input",
-              name: entry,
-              message: "merge "+entry+"? [y,n]",
-              default: "n"
-            })
-          })
-          inquirer.prompt(questions, function(answers) {
-            var mergeList = []
-            for(var key in answers)
-              if(answers[key] == "y")
-                mergeList.push(key)
-            async.eachSeries(mergeList, function(item, nextItem){
-              var src = path.join(upstreamDirPath, "context", item)
-              var dest = path.join(process.cwd(), "context", item)
-              console.info("copy ", src, " - over ->", dest)
-              cp(src, dest).read(nextItem)
-            }, next)
-          })
-        })
-        
-      },
-
-      // start tests
-      function(next){
-        angel.sh("npm test", next)
-      }
-    ]
-
-    async.eachSeries(tasks, function(task, next){
-      task(next)
-    }, function(err){
-      if(err) {
-        console.error(err)
-        process.exit(1)
-        return
-      }
-      console.info("all done, git diff & go")
-    })
+   async.eachSeries(tasks, function(task, next){
+     task(next)
+   }, function(err){
+     if(err) {
+       console.error(err)
+       process.exit(1)
+       return
+     }
+     console.info("all done, git diff & go")
+   })
   })
-  .example("angel stack update https://github.com/outbounder/organic-stem-skeleton.git")
+  .example("$ angel stack update git@github.com:user/repo.git relative/path")
+  .description("merges .json files and copyover all others found from source path to current working directory")
 }

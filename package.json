@@ -1,28 +1,32 @@
 {
   "name": "angelscripts-stack-update",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Update current working project's stack using git stored source",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "peerDependencies": {
-    "organic-angel": "0.2.x"
+    "organic-angel": "0.x.x"
   },
   "author": "Boris Filipov",
   "license": "MIT",
   "dependencies": {
-    "angelabilities-exec": "0.0.1",
-    "async": "^0.9.0",
-    "cp-r": "^0.1.2",
-    "inquirer": "^0.8.0",
-    "organic-angel": "^0.2.17",
-    "organic-dna": "0.0.1",
-    "organic-dna-fold": "^0.1.1",
-    "organic-dna-fsloader": "0.0.2",
-    "organic-dna-save": "0.0.1",
-    "temp": "^0.8.1",
-    "underscore": "^1.7.0"
+    "angelabilities-exec": "^0.1.0",
+    "async": "^1.5.0",
+    "fs-extra": "^0.26.3",
+    "glob-stream": "^5.3.0",
+    "merge-util": "^0.3.1",
+    "organic-angel": "^0.3.0",
+    "temp": "^0.8.3"
   },
-  "devDependencies": {}
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/outbounder/angelscripts-stack-update.git"
+  },
+  "bugs": {
+    "url": "https://github.com/outbounder/angelscripts-stack-update/issues"
+  },
+  "homepage": "https://github.com/outbounder/angelscripts-stack-update#readme"
 }
